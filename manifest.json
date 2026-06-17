@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Google Maps Reviews Extractor",
+  "version": "1.0.0",
+  "description": "Download Google Maps business reviews within a date range as JSON.",
+  "content_scripts": [
+    {
+      "matches": ["https://www.google.com/maps/*"],
+      "js": ["utils.js", "content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
