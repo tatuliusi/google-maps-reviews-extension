@@ -323,6 +323,12 @@ function extractReviewText(el) {
   return best || null;
 }
 
+// Format a Date as YYYY-MM-DD using LOCAL calendar (not UTC), so dates don't
+// shift backwards for users in UTC+ timezones when we call toISOString().
+function localDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 function extractReview(el) {
   const dateText  = extractDateText(el);
   const parsedDate = parseRelativeDate(dateText);
@@ -331,7 +337,7 @@ function extractReview(el) {
     reviewer:   extractReviewer(el),
     stars:      extractStars(el),
     dateText,
-    date:       parsedDate ? parsedDate.toISOString().slice(0, 10) : null,
+    date:       parsedDate ? localDateStr(parsedDate) : null,
     reviewText: extractReviewText(el),
   };
 }
@@ -372,9 +378,11 @@ async function runCrawl() {
     return;
   }
 
-  const fromDate = new Date(fromVal);
-  const toDate   = new Date(toVal);
-  toDate.setHours(23, 59, 59, 999);
+  // Append time so the browser parses the date in LOCAL time, not UTC midnight.
+  // Without this, "2026-06-15" becomes June 15 00:00 UTC which is June 15 04:00
+  // local in GMT+4 — causing off-by-one comparisons against locally-computed dates.
+  const fromDate = new Date(fromVal + 'T00:00:00');
+  const toDate   = new Date(toVal   + 'T23:59:59.999');
 
   const reviews = [];
   const seenIds = new Set();
