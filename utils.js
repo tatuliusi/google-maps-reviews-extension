@@ -71,14 +71,16 @@ function dateInRange(date, from, to) {
  */
 function isRelativeDate(text) {
   if (!text) return false;
-  const s = text.trim().toLowerCase();
+  // Strip "Edited "/"Updated " prefix (Google Maps adds it to edited reviews)
+  const s = text.trim().toLowerCase().replace(/^(edited|updated)\s+/, '');
+  const raw = text.trim().replace(/^(edited|updated)\s+/i, '');
   return (
     s === 'just now'
     || s === 'moments ago'
     || /\d+\s+(minute|hour|day|week|month|year)s?\s+ago/.test(s)
     || /^(a|an)\s+(minute|hour|day|week|month|year)\s+ago$/.test(s)
-    || /\d+\s+(წამის|წუთის|საათის|დღის|კვირის|თვის|წლის)\s+წინ/.test(text)
-    || text.trim() === 'ახლახანს'
+    || /\d+\s+(წამის|წუთის|საათის|დღის|კვირის|თვის|წლის)\s+წინ/.test(raw)
+    || raw === 'ახლახანს'
   );
 }
 
@@ -94,7 +96,8 @@ function isRelativeDate(text) {
  */
 function parseRelativeDate(text) {
   if (!text) return null;
-  const s = text.trim();
+  // Strip "Edited "/"Updated " prefix before parsing
+  const s = text.trim().replace(/^(edited|updated)\s+/i, '');
   const lower = s.toLowerCase();
 
   if (lower === 'just now' || lower === 'moments ago' || s === 'ახლახანს') {
