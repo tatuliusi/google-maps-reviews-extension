@@ -251,12 +251,30 @@ function extractReviewer(el) {
 }
 
 function extractDateText(el) {
-  const knownEl = el.querySelector('.rsqaWe');
-  if (knownEl && isRelativeDate(knownEl.textContent)) return knownEl.textContent.trim();
-  for (const child of el.querySelectorAll('span, div')) {
-    const t = child.textContent.trim();
-    if (t.length < 40 && isRelativeDate(t)) return t;
+  // Strategy 1: known Maps date class names
+  for (const sel of ['.rsqaWe', '.dehysf']) {
+    const node = el.querySelector(sel);
+    if (node) {
+      const raw = node.textContent.trim();
+      if (raw && isRelativeDate(raw)) return raw;
+    }
   }
+
+  // Strategy 2: walk raw text nodes — works even when class names change.
+  // Text nodes give us the leaf string without sibling/ancestor contamination.
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+  let textNode;
+  while ((textNode = walker.nextNode())) {
+    const t = textNode.nodeValue.trim();
+    if (t.length > 2 && t.length < 70 && isRelativeDate(t)) return t;
+  }
+
+  // Strategy 3: aria-label attributes (Maps encodes dates here on some layouts)
+  for (const child of el.querySelectorAll('[aria-label]')) {
+    const label = (child.getAttribute('aria-label') || '').trim();
+    if (label.length < 70 && isRelativeDate(label)) return label;
+  }
+
   return null;
 }
 
@@ -332,6 +350,7 @@ async function runCrawl() {
   let seenTooNew        = false;
   let consecutiveTooOld = 0;
   let emptyScrolls      = 0;
+  let skippedUndated    = 0;
 
   setStatus('Sorting reviews by newest…');
   const sorted = await sortByNewest();
@@ -364,17 +383,21 @@ async function runCrawl() {
       const review = extractReview(el);
       const date   = parseRelativeDate(review.dateText);
 
-      if (date && date > toDate) {
+      if (date === null) {
+        // Could not parse date — skip but don't let it trigger early-stop
+        skippedUndated++;
+        log('warn', `Skipped review ${id}: date text not recognised (dateText=${JSON.stringify(review.dateText)})`);
+      } else if (date > toDate) {
         seenTooNew = true;
         consecutiveTooOld = 0;
-      } else if (date && date < fromDate) {
+      } else if (date < fromDate) {
         consecutiveTooOld++;
         if (consecutiveTooOld >= MAX_CONSECUTIVE_TOO_OLD && (seenTooNew || reviews.length > 0)) {
           log('info', `Stopping: ${MAX_CONSECUTIVE_TOO_OLD} consecutive reviews older than from-date.`);
           break crawlLoop;
         }
       } else {
-        // In range (or date unparseable → conservative include)
+        // Date is within [fromDate, toDate]
         consecutiveTooOld = 0;
         seenTooNew = true;
         reviews.push(review);
@@ -403,18 +426,20 @@ async function runCrawl() {
   _state = 'idle';
   setButtons('idle');
 
+  const suffix = skippedUndated > 0 ? ` (${skippedUndated} skipped — date unreadable)` : '';
   const msg = finalState === 'stopped'
-    ? `Stopped. ${reviews.length} review${reviews.length === 1 ? '' : 's'} collected.`
-    : `Done — ${reviews.length} review${reviews.length === 1 ? '' : 's'} collected.`;
+    ? `Stopped. ${reviews.length} review${reviews.length === 1 ? '' : 's'} collected.${suffix}`
+    : `Done — ${reviews.length} review${reviews.length === 1 ? '' : 's'} collected.${suffix}`;
   setStatus(msg);
 
   if (reviews.length > 0) {
     downloadJSON({
-      business:     getBusinessName(),
-      url:          location.href,
-      dateRange:    { from: fromVal, to: toVal },
-      extractedAt:  new Date().toISOString(),
-      totalReviews: reviews.length,
+      business:        getBusinessName(),
+      url:             location.href,
+      dateRange:       { from: fromVal, to: toVal },
+      extractedAt:     new Date().toISOString(),
+      totalReviews:    reviews.length,
+      skippedUndated,
       reviews,
     });
   }
