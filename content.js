@@ -152,14 +152,17 @@ function getBusinessName() {
   );
 }
 
-// Hardened: tries role="feed", then scroll-ancestor walk, then known Maps classes.
+// Confirmed from HTML: role="feed" does NOT exist in Maps.
+// The scrollable pane is .m6QErb[tabindex] or found via overflow walk-up.
 async function findReviewsContainer() {
-  const feed = document.querySelector('[role="feed"]');
-  if (feed) return feed;
+  // Strategy 1: confirmed tabindex scrollable pane (seen in real Maps HTML)
+  const tabPane = document.querySelector('.m6QErb[tabindex]');
+  if (tabPane) return tabPane;
 
+  // Strategy 2: walk up from a review card looking for scrollable ancestor
   let review;
   try {
-    review = await waitForElement('[data-review-id]', 15000);
+    review = await waitForElement('.jftiEf[data-review-id]', 15000);
   } catch {
     return null;
   }
@@ -171,20 +174,17 @@ async function findReviewsContainer() {
     el = el.parentElement;
   }
 
-  // Known Maps scrollable pane class (may change with Maps updates)
-  return (
-    document.querySelector('.m6QErb[tabindex]')
-    || document.querySelector('.m6QErb')
-    || null
-  );
+  // Strategy 3: any .m6QErb as last resort
+  return document.querySelector('.m6QErb') || null;
 }
 
 // Open the sort menu and click "Newest".
 async function sortByNewest() {
   const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
 
+  // Confirmed from HTML: Maps uses data-value="Sort" (capital S)
   const sortBtn =
-    document.querySelector('[data-value="sort"]')
+    document.querySelector('[data-value="Sort"]')
     || allButtons.find(el => {
         const label = (el.getAttribute('aria-label') || el.textContent || '').toLowerCase().trim();
         return label === 'sort' || label === 'sort reviews';
@@ -211,16 +211,18 @@ async function sortByNewest() {
 }
 
 // Click all un-expanded "More" buttons inside review cards in one pass.
+// IMPORTANT: Maps already sets data-mr-expanded="1" on its own elements,
+// so we use data-rext-expanded to avoid the conflict.
 async function expandVisibleMoreButtons() {
   let clicked = 0;
-  for (const reviewEl of document.querySelectorAll('[data-review-id]')) {
-    if (reviewEl.dataset.mrExpanded) continue;
-    reviewEl.dataset.mrExpanded = '1';
+  for (const reviewEl of document.querySelectorAll('.jftiEf[data-review-id]')) {
+    if (reviewEl.dataset.rextExpanded) continue;
+    reviewEl.dataset.rextExpanded = '1';
 
     const btns = Array.from(reviewEl.querySelectorAll('button, [role="button"]'));
     const moreBtn = btns.find(b => {
       const text = b.textContent.trim().toLowerCase();
-      return text === 'more' || text === 'მეტი'; // Georgian "more"
+      return text === 'more' || text === 'მეტი';
     });
     if (moreBtn) {
       moreBtn.click();
@@ -232,21 +234,19 @@ async function expandVisibleMoreButtons() {
 
 // ─── Review extraction ────────────────────────────────────────────────────────
 function extractStars(el) {
+  // Confirmed from HTML: <span class="kvMYJc" role="img" aria-label="5 stars">
   const starEl =
-    el.querySelector('[aria-label*="star"]')
-    || el.querySelector('span[role="img"][aria-label]');
+    el.querySelector('.kvMYJc[role="img"]')
+    || el.querySelector('span[role="img"][aria-label*="star"]');
   if (!starEl) return null;
   const m = (starEl.getAttribute('aria-label') || '').match(/(\d)/);
   return m ? parseInt(m[1], 10) : null;
 }
 
 function extractReviewer(el) {
-  const profileLink = el.querySelector('a[href*="/maps/contrib/"]');
-  if (profileLink) {
-    const nameEl = profileLink.querySelector('div, span');
-    const name = nameEl?.textContent?.trim() || profileLink.textContent.trim();
-    if (name) return name;
-  }
+  // Confirmed from HTML: reviewer name is in <div class="d4r55"> inside
+  // a <button class="al6Kxe" data-href="...maps/contrib/...">
+  // There is NO <a href> — the link is a button with data-href.
   return el.querySelector('.d4r55')?.textContent?.trim() || null;
 }
 
@@ -279,11 +279,12 @@ function extractDateText(el) {
 }
 
 function extractReviewText(el) {
-  const knownEl =
-    el.querySelector('[jsname="bN97Pc"]')
-    || el.querySelector('[class*="wiI7pd"]');
+  // Confirmed from HTML: <span class="wiI7pd"> inside <div class="MyEned">
+  // jsname="bN97Pc" does NOT exist in real Maps HTML — removed.
+  const knownEl = el.querySelector('.wiI7pd') || el.querySelector('[class*="wiI7pd"]');
   if (knownEl) return knownEl.textContent.trim() || null;
 
+  // Fallback: longest span that isn't a date string
   let best = '';
   for (const span of el.querySelectorAll('span')) {
     const t = span.textContent.trim();
@@ -371,7 +372,10 @@ async function runCrawl() {
     // Expand truncated reviews before scraping this batch
     await expandVisibleMoreButtons();
 
-    const reviewEls = document.querySelectorAll('[data-review-id]');
+    // Use .jftiEf to target only the outer review card element.
+    // Maps puts data-review-id on ~9 elements per review (buttons, inner divs, etc.)
+    // — scoping to .jftiEf ensures we process each review exactly once.
+    const reviewEls = document.querySelectorAll('.jftiEf[data-review-id]');
 
     for (const el of reviewEls) {
       if (_state !== 'running') break crawlLoop;
