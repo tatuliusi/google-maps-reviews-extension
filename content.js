@@ -193,12 +193,39 @@ async function sortByNewest() {
   if (!sortBtn) return false;
 
   sortBtn.click();
-  await sleep(700);
 
-  const menuItems = Array.from(
-    document.querySelectorAll('[role="menuitem"], [role="option"], [role="radio"]')
-  );
-  const newestOpt = menuItems.find(el => /newest/i.test(el.textContent));
+  // Wait for the sort dropdown to render (roles confirmed in Maps: menuitemcheckbox)
+  const MENU_ROLES = '[role="menuitem"], [role="menuitemcheckbox"], [role="option"], [role="radio"]';
+  try {
+    await waitForElement(MENU_ROLES, 3000);
+  } catch {
+    // menu may use a different structure — fall through to text search
+  }
+
+  // Strategy 1: ARIA role-based (menuitemcheckbox is confirmed present in Maps HTML)
+  let newestOpt = Array.from(document.querySelectorAll(MENU_ROLES))
+    .find(el => /newest/i.test(el.textContent));
+
+  // Strategy 2: any jsaction-bearing element with "Newest" as its short text
+  if (!newestOpt) {
+    newestOpt = Array.from(document.querySelectorAll('[jsaction]'))
+      .find(el => {
+        const t = el.textContent.trim();
+        return t.length < 25 && /newest/i.test(t);
+      });
+  }
+
+  // Strategy 3: TreeWalker — find the "Newest" text node and click its parent
+  if (!newestOpt) {
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (/^Newest$/i.test(node.nodeValue.trim())) {
+        newestOpt = node.parentElement;
+        break;
+      }
+    }
+  }
 
   if (!newestOpt) {
     document.body.click();
