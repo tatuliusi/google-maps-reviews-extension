@@ -144,11 +144,14 @@ function setButtons(state) {
 
 // ─── Business / DOM helpers ───────────────────────────────────────────────────
 function getBusinessName() {
+  // Confirmed from HTML: Maps has NO <h1>. Name is in aria-label on role="main",
+  // and as the first part of <title> ("Radio City - Google Maps").
   return (
-    document.querySelector('h1.DUwDvf')?.textContent?.trim()
-    || document.querySelector('[data-item-id] h1')?.textContent?.trim()
+    document.querySelector('[role="main"]')?.getAttribute('aria-label')?.trim()
+    || document.querySelector('h1.DUwDvf')?.textContent?.trim()
     || document.querySelector('h1')?.textContent?.trim()
-    || 'business'
+    || document.title.split(' - ')[0].trim()
+    || 'unknown'
   );
 }
 
