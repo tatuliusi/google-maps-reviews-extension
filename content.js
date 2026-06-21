@@ -1,17 +1,12 @@
-/**
- * content.js — Google Maps Reviews Extractor
- * Injects a floating panel, crawls the reviews list, and downloads a JSON file.
- */
-
 'use strict';
 
 // ─── Module state ─────────────────────────────────────────────────────────────
-let _state  = 'idle'; // 'idle' | 'running' | 'paused' | 'stopped'
-let _shadow = null;
+let _state   = 'idle'; // 'idle' | 'running' | 'paused' | 'stopped'
+let _shadow  = null;
+let _lastUrl = location.href;
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 function log(level, ...args) {
-  // eslint-disable-next-line no-console
   console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](
     '[MapsReviews]', ...args
   );
@@ -157,11 +152,11 @@ function getBusinessName() {
   );
 }
 
-/**
- * Walk up from the first [data-review-id] element to find the scrollable
- * container that holds all review cards.
- */
+// Hardened: tries role="feed", then scroll-ancestor walk, then known Maps classes.
 async function findReviewsContainer() {
+  const feed = document.querySelector('[role="feed"]');
+  if (feed) return feed;
+
   let review;
   try {
     review = await waitForElement('[data-review-id]', 15000);
@@ -172,27 +167,26 @@ async function findReviewsContainer() {
   let el = review.parentElement;
   while (el && el !== document.body) {
     const ov = window.getComputedStyle(el).overflowY;
-    if (ov === 'auto' || ov === 'scroll') return el;
+    if ((ov === 'auto' || ov === 'scroll') && el.scrollHeight > el.clientHeight) return el;
     el = el.parentElement;
   }
 
-  return document.querySelector('[role="feed"]') || null;
+  // Known Maps scrollable pane class (may change with Maps updates)
+  return (
+    document.querySelector('.m6QErb[tabindex]')
+    || document.querySelector('.m6QErb')
+    || null
+  );
 }
 
-/**
- * Open the sort menu and click "Newest". Returns true on success.
- * Fails gracefully — crawl continues even without sorting.
- */
+// Open the sort menu and click "Newest".
 async function sortByNewest() {
-  const allButtons = Array.from(
-    document.querySelectorAll('button, [role="button"]')
-  );
+  const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
 
-  const sortBtn = document.querySelector('[data-value="sort"]')
+  const sortBtn =
+    document.querySelector('[data-value="sort"]')
     || allButtons.find(el => {
-        const label = (
-          el.getAttribute('aria-label') || el.textContent || ''
-        ).toLowerCase().trim();
+        const label = (el.getAttribute('aria-label') || el.textContent || '').toLowerCase().trim();
         return label === 'sort' || label === 'sort reviews';
       });
 
@@ -207,13 +201,33 @@ async function sortByNewest() {
   const newestOpt = menuItems.find(el => /newest/i.test(el.textContent));
 
   if (!newestOpt) {
-    document.body.click(); // close menu
+    document.body.click();
     return false;
   }
 
   newestOpt.click();
   await sleep(1500);
   return true;
+}
+
+// Click all un-expanded "More" buttons inside review cards in one pass.
+async function expandVisibleMoreButtons() {
+  let clicked = 0;
+  for (const reviewEl of document.querySelectorAll('[data-review-id]')) {
+    if (reviewEl.dataset.mrExpanded) continue;
+    reviewEl.dataset.mrExpanded = '1';
+
+    const btns = Array.from(reviewEl.querySelectorAll('button, [role="button"]'));
+    const moreBtn = btns.find(b => {
+      const text = b.textContent.trim().toLowerCase();
+      return text === 'more' || text === 'მეტი'; // Georgian "more"
+    });
+    if (moreBtn) {
+      moreBtn.click();
+      clicked++;
+    }
+  }
+  if (clicked > 0) await sleep(500);
 }
 
 // ─── Review extraction ────────────────────────────────────────────────────────
@@ -227,40 +241,31 @@ function extractStars(el) {
 }
 
 function extractReviewer(el) {
-  // Google Maps links reviewer names to their contribution profile
   const profileLink = el.querySelector('a[href*="/maps/contrib/"]');
   if (profileLink) {
     const nameEl = profileLink.querySelector('div, span');
     const name = nameEl?.textContent?.trim() || profileLink.textContent.trim();
     if (name) return name;
   }
-  // Fallback to known obfuscated class (degrades if Maps changes it)
   return el.querySelector('.d4r55')?.textContent?.trim() || null;
 }
 
 function extractDateText(el) {
-  // Try the known class first
   const knownEl = el.querySelector('.rsqaWe');
-  if (knownEl && isRelativeDate(knownEl.textContent)) {
-    return knownEl.textContent.trim();
-  }
-  // Walk all inline elements for relative date text
+  if (knownEl && isRelativeDate(knownEl.textContent)) return knownEl.textContent.trim();
   for (const child of el.querySelectorAll('span, div')) {
     const t = child.textContent.trim();
-    // Avoid matching whole-review text blobs by checking length
     if (t.length < 40 && isRelativeDate(t)) return t;
   }
   return null;
 }
 
 function extractReviewText(el) {
-  // Google Maps uses data-expandable-section or jsname="bN97Pc" for the full text
   const knownEl =
     el.querySelector('[jsname="bN97Pc"]')
     || el.querySelector('[class*="wiI7pd"]');
   if (knownEl) return knownEl.textContent.trim() || null;
 
-  // Fallback: longest span that is not a relative date and has real length
   let best = '';
   for (const span of el.querySelectorAll('span')) {
     const t = span.textContent.trim();
@@ -270,22 +275,25 @@ function extractReviewText(el) {
 }
 
 function extractReview(el) {
+  const dateText  = extractDateText(el);
+  const parsedDate = parseRelativeDate(dateText);
   return {
     id:         el.getAttribute('data-review-id'),
     reviewer:   extractReviewer(el),
     stars:      extractStars(el),
-    dateText:   extractDateText(el),
+    dateText,
+    date:       parsedDate ? parsedDate.toISOString().slice(0, 10) : null,
     reviewText: extractReviewText(el),
   };
 }
 
 // ─── Download ─────────────────────────────────────────────────────────────────
-function downloadJSON(reviews) {
+function downloadJSON(payload) {
   const rawName = getBusinessName().replace(/[^a-z0-9]/gi, '_').slice(0, 60);
   const dateSuffix = new Date().toISOString().slice(0, 10);
   const filename = `${rawName}_reviews_${dateSuffix}.json`;
 
-  const blob = new Blob([JSON.stringify(reviews, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href     = url;
@@ -294,7 +302,7 @@ function downloadJSON(reviews) {
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 10000);
-  log('info', `Downloaded ${reviews.length} reviews as ${filename}`);
+  log('info', `Downloaded ${payload.totalReviews} reviews as ${filename}`);
 }
 
 // ─── Crawl ────────────────────────────────────────────────────────────────────
@@ -325,12 +333,10 @@ async function runCrawl() {
   let consecutiveTooOld = 0;
   let emptyScrolls      = 0;
 
-  // Step 1 — sort by newest
   setStatus('Sorting reviews by newest…');
   const sorted = await sortByNewest();
   if (!sorted) log('warn', 'Sort by newest failed — proceeding without sorting');
 
-  // Step 2 — locate the scrollable reviews pane
   setStatus('Locating reviews pane…');
   const container = await findReviewsContainer();
   if (!container) {
@@ -343,8 +349,10 @@ async function runCrawl() {
   setStatus('Crawling…');
 
   crawlLoop: while (_state === 'running') {
+    // Expand truncated reviews before scraping this batch
+    await expandVisibleMoreButtons();
+
     const reviewEls = document.querySelectorAll('[data-review-id]');
-    let newFound = 0;
 
     for (const el of reviewEls) {
       if (_state !== 'running') break crawlLoop;
@@ -352,24 +360,21 @@ async function runCrawl() {
       const id = el.getAttribute('data-review-id');
       if (seenIds.has(id)) continue;
       seenIds.add(id);
-      newFound++;
 
       const review = extractReview(el);
       const date   = parseRelativeDate(review.dateText);
 
       if (date && date > toDate) {
-        // Review is newer than our range — keep scrolling
         seenTooNew = true;
         consecutiveTooOld = 0;
       } else if (date && date < fromDate) {
-        // Review is older than our range
         consecutiveTooOld++;
         if (consecutiveTooOld >= MAX_CONSECUTIVE_TOO_OLD && (seenTooNew || reviews.length > 0)) {
           log('info', `Stopping: ${MAX_CONSECUTIVE_TOO_OLD} consecutive reviews older than from-date.`);
           break crawlLoop;
         }
       } else {
-        // In range (or date is null → conservative include)
+        // In range (or date unparseable → conservative include)
         consecutiveTooOld = 0;
         seenTooNew = true;
         reviews.push(review);
@@ -377,7 +382,6 @@ async function runCrawl() {
       }
     }
 
-    // Scroll container down to load more reviews
     const prevScrollHeight = container.scrollHeight;
     container.scrollTop = container.scrollHeight;
     await sleep(1500);
@@ -392,7 +396,6 @@ async function runCrawl() {
       emptyScrolls = 0;
     }
 
-    // Honour pause — spin until resumed or stopped
     while (_state === 'paused') await sleep(300);
   }
 
@@ -405,7 +408,16 @@ async function runCrawl() {
     : `Done — ${reviews.length} review${reviews.length === 1 ? '' : 's'} collected.`;
   setStatus(msg);
 
-  if (reviews.length > 0) downloadJSON(reviews);
+  if (reviews.length > 0) {
+    downloadJSON({
+      business:     getBusinessName(),
+      url:          location.href,
+      dateRange:    { from: fromVal, to: toVal },
+      extractedAt:  new Date().toISOString(),
+      totalReviews: reviews.length,
+      reviews,
+    });
+  }
 }
 
 // ─── Button wiring ────────────────────────────────────────────────────────────
@@ -441,6 +453,31 @@ function wireButtons(shadow) {
   });
 }
 
+// ─── Extension icon toggle ────────────────────────────────────────────────────
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type !== 'toggle-panel') return;
+  const host = document.getElementById('maps-reviews-extractor-host');
+  if (!host) {
+    init();
+  } else {
+    const panel = _shadow?.querySelector('#panel');
+    if (panel) panel.style.display = panel.style.display === 'none' ? '' : 'none';
+  }
+});
+
+// ─── SPA navigation guard ─────────────────────────────────────────────────────
+// Google Maps is a SPA; content scripts don't re-run on in-app navigation.
+function watchForNavigation() {
+  setInterval(() => {
+    if (location.href === _lastUrl) return;
+    _lastUrl = location.href;
+    // Wait for Maps to finish rendering the new page
+    setTimeout(() => {
+      if (!document.getElementById('maps-reviews-extractor-host')) init();
+    }, 2000);
+  }, 1000);
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 function init() {
   if (document.getElementById('maps-reviews-extractor-host')) return;
@@ -448,8 +485,7 @@ function init() {
   const shadow = injectPanel();
   wireButtons(shadow);
 
-  // Default date range: past 30 days → today
-  const today = new Date();
+  const today  = new Date();
   const past30 = new Date(today);
   past30.setDate(past30.getDate() - 30);
 
@@ -460,7 +496,8 @@ function init() {
 }
 
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', () => { init(); watchForNavigation(); });
 } else {
   init();
+  watchForNavigation();
 }
