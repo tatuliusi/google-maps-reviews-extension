@@ -552,12 +552,11 @@ function init() {
   const shadow = injectPanel();
   wireButtons(shadow);
 
-  const today  = new Date();
-  const past30 = new Date(today);
-  past30.setDate(past30.getDate() - 30);
+  const today          = new Date();
+  const firstOfMonth   = new Date(today.getFullYear(), today.getMonth(), 1);
 
-  shadow.querySelector('#to-date').value   = today.toISOString().slice(0, 10);
-  shadow.querySelector('#from-date').value = past30.toISOString().slice(0, 10);
+  shadow.querySelector('#to-date').value   = localDateStr(today);
+  shadow.querySelector('#from-date').value = localDateStr(firstOfMonth);
 
   log('info', 'Panel injected');
 }
