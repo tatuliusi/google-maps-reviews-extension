@@ -264,13 +264,21 @@ async function expandVisibleMoreButtons() {
 
 // ─── Review extraction ────────────────────────────────────────────────────────
 function extractStars(el) {
-  // Confirmed from HTML: <span class="kvMYJc" role="img" aria-label="5 stars">
+  // Standard Maps layout: <span class="kvMYJc" role="img" aria-label="5 stars">
   const starEl =
     el.querySelector('.kvMYJc[role="img"]')
     || el.querySelector('span[role="img"][aria-label*="star"]');
-  if (!starEl) return null;
-  const m = (starEl.getAttribute('aria-label') || '').match(/(\d)/);
-  return m ? parseInt(m[1], 10) : null;
+  if (starEl) {
+    const m = (starEl.getAttribute('aria-label') || '').match(/(\d)/);
+    if (m) return parseInt(m[1], 10);
+  }
+  // Hotel layout: <span class="fontBodyLarge fzvQIb">5/5</span>
+  const hotelEl = el.querySelector('.fzvQIb');
+  if (hotelEl) {
+    const m = hotelEl.textContent.trim().match(/^(\d)\/5$/);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
 }
 
 function extractReviewer(el) {
