@@ -146,13 +146,20 @@ function setButtons(state) {
 function getBusinessName() {
   // Confirmed from HTML: Maps has NO <h1>. Name is in aria-label on role="main",
   // and as the first part of <title> ("Radio City - Google Maps").
-  return (
+  const raw = (
     document.querySelector('[role="main"]')?.getAttribute('aria-label')?.trim()
     || document.querySelector('h1.DUwDvf')?.textContent?.trim()
     || document.querySelector('h1')?.textContent?.trim()
     || document.title.split(' - ')[0].trim()
     || 'unknown'
   );
+  // On the Reviews subview, aria-label can be "Reviews for X" / "Reviews of X"
+  // (or the Georgian "X-ის მიმოხილვები"). Strip so the filename is clean.
+  return raw
+    .replace(/^Reviews\s+(for|of)\s+/i, '')
+    .replace(/[-–—\s]*Google\s+Maps$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim() || 'unknown';
 }
 
 // Confirmed from HTML: role="feed" does NOT exist in Maps.
@@ -205,16 +212,19 @@ async function sortByNewest() {
     // menu may use a different structure — fall through to text search
   }
 
+  // Matches English "Newest" and Georgian "უახლესი"
+  const NEWEST_RE = /newest|უახლესი/i;
+
   // Strategy 1: ARIA role-based (menuitemcheckbox is confirmed present in Maps HTML)
   let newestOpt = Array.from(document.querySelectorAll(MENU_ROLES))
-    .find(el => /newest/i.test(el.textContent));
+    .find(el => NEWEST_RE.test(el.textContent));
 
   // Strategy 2: any jsaction-bearing element with "Newest" as its short text
   if (!newestOpt) {
     newestOpt = Array.from(document.querySelectorAll('[jsaction]'))
       .find(el => {
         const t = el.textContent.trim();
-        return t.length < 25 && /newest/i.test(t);
+        return t.length < 25 && NEWEST_RE.test(t);
       });
   }
 
@@ -223,7 +233,8 @@ async function sortByNewest() {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
     let node;
     while ((node = walker.nextNode())) {
-      if (/^Newest$/i.test(node.nodeValue.trim())) {
+      const t = node.nodeValue.trim();
+      if (/^(Newest|უახლესი)$/i.test(t)) {
         newestOpt = node.parentElement;
         break;
       }
@@ -401,7 +412,10 @@ async function runCrawl() {
 
   setStatus('Sorting reviews by newest…');
   const sorted = await sortByNewest();
-  if (!sorted) log('warn', 'Sort by newest failed — proceeding without sorting');
+  if (!sorted) {
+    log('warn', 'Sort by newest failed — early-stop disabled, will scroll to end');
+    setStatus('Sort failed — scanning full list…');
+  }
 
   setStatus('Locating reviews pane…');
   const container = await findReviewsContainer();
@@ -442,7 +456,10 @@ async function runCrawl() {
         consecutiveTooOld = 0;
       } else if (date < fromDate) {
         consecutiveTooOld++;
-        if (consecutiveTooOld >= MAX_CONSECUTIVE_TOO_OLD && (seenTooNew || reviews.length > 0)) {
+        // Early-stop only makes sense when the feed is date-ordered.
+        // If sortByNewest failed, dates are jumbled and early-stopping
+        // would drop in-range reviews further down the list.
+        if (sorted && consecutiveTooOld >= MAX_CONSECUTIVE_TOO_OLD && (seenTooNew || reviews.length > 0)) {
           log('info', `Stopping: ${MAX_CONSECUTIVE_TOO_OLD} consecutive reviews older than from-date.`);
           break crawlLoop;
         }
@@ -555,7 +572,11 @@ function watchForNavigation() {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 function init() {
-  if (document.getElementById('maps-reviews-extractor-host')) return;
+  const existingHost = document.getElementById('maps-reviews-extractor-host');
+  if (existingHost && _shadow) return;
+  // Stale host from a previous injection (e.g. extension reload). Its
+  // event listeners are dead — remove it so we can wire fresh ones.
+  if (existingHost) existingHost.remove();
 
   const shadow = injectPanel();
   wireButtons(shadow);

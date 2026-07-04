@@ -74,12 +74,14 @@ function isRelativeDate(text) {
   // Strip "Edited "/"Updated " prefix (Google Maps adds it to edited reviews)
   const s = text.trim().toLowerCase().replace(/^(edited|updated)\s+/, '');
   const raw = text.trim().replace(/^(edited|updated)\s+/i, '');
+  // Patterns MUST be anchored — otherwise a review body like
+  // "I went there 3 days ago" would false-positive as a date.
   return (
     s === 'just now'
     || s === 'moments ago'
-    || /\d+\s+(minute|hour|day|week|month|year)s?\s+ago/.test(s)
+    || /^\d+\s+(minute|hour|day|week|month|year)s?\s+ago$/.test(s)
     || /^(a|an)\s+(minute|hour|day|week|month|year)\s+ago$/.test(s)
-    || /\d+\s+(წამის|წუთის|საათის|დღის|კვირის|თვის|წლის)\s+წინ/.test(raw)
+    || /^\d+\s+(წამის|წუთის|საათის|დღის|კვირის|თვის|წლის)\s+წინ$/.test(raw)
     || raw === 'ახლახანს'
   );
 }
