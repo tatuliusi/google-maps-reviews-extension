@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Google Maps Reviews Extractor",
-  "version": "1.1.0",
-  "description": "Download Google Maps business reviews within a date range as JSON.",
+  "name": "Reviews Extractor (Maps · TripAdvisor · Expedia · Booking)",
+  "version": "1.3.0",
+  "description": "Download business reviews within a date range as JSON from Google Maps, TripAdvisor, Expedia, and Booking.com.",
   "action": {
     "default_title": "Toggle Reviews Extractor Panel"
   },
@@ -10,11 +10,66 @@
     "service_worker": "background.js"
   },
   "permissions": ["scripting"],
-  "host_permissions": ["https://www.google.com/maps/*"],
+  "host_permissions": [
+    "https://www.google.com/maps/*",
+    "https://www.tripadvisor.com/*",
+    "https://www.tripadvisor.co.uk/*",
+    "https://www.tripadvisor.de/*",
+    "https://www.tripadvisor.fr/*",
+    "https://www.tripadvisor.it/*",
+    "https://www.tripadvisor.es/*",
+    "https://www.tripadvisor.ca/*",
+    "https://www.tripadvisor.com.au/*",
+    "https://www.expedia.com/*",
+    "https://www.expedia.co.uk/*",
+    "https://www.expedia.de/*",
+    "https://www.expedia.fr/*",
+    "https://www.expedia.it/*",
+    "https://www.expedia.es/*",
+    "https://www.expedia.ca/*",
+    "https://www.expedia.com.au/*",
+    "https://www.booking.com/*",
+    "https://www.booking.co.uk/*",
+    "https://www.booking.de/*",
+    "https://www.booking.fr/*",
+    "https://www.booking.it/*",
+    "https://www.booking.es/*"
+  ],
   "content_scripts": [
     {
-      "matches": ["https://www.google.com/maps/*"],
-      "js": ["utils.js", "content.js"],
+      "matches": [
+        "https://www.google.com/maps/*",
+        "https://www.tripadvisor.com/*",
+        "https://www.tripadvisor.co.uk/*",
+        "https://www.tripadvisor.de/*",
+        "https://www.tripadvisor.fr/*",
+        "https://www.tripadvisor.it/*",
+        "https://www.tripadvisor.es/*",
+        "https://www.tripadvisor.ca/*",
+        "https://www.tripadvisor.com.au/*",
+        "https://www.expedia.com/*",
+        "https://www.expedia.co.uk/*",
+        "https://www.expedia.de/*",
+        "https://www.expedia.fr/*",
+        "https://www.expedia.it/*",
+        "https://www.expedia.es/*",
+        "https://www.expedia.ca/*",
+        "https://www.expedia.com.au/*",
+        "https://www.booking.com/*",
+        "https://www.booking.co.uk/*",
+        "https://www.booking.de/*",
+        "https://www.booking.fr/*",
+        "https://www.booking.it/*",
+        "https://www.booking.es/*"
+      ],
+      "js": [
+        "utils.js",
+        "adapters/maps.js",
+        "adapters/tripadvisor.js",
+        "adapters/expedia.js",
+        "adapters/booking.js",
+        "content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }

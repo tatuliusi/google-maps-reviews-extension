@@ -4,12 +4,26 @@
 let _state   = 'idle'; // 'idle' | 'running' | 'paused' | 'stopped'
 let _shadow  = null;
 let _lastUrl = location.href;
+let _adapter = null;
 
 // ─── Logging ──────────────────────────────────────────────────────────────────
 function log(level, ...args) {
-  console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](
-    '[MapsReviews]', ...args
-  );
+  const tag = _adapter ? `[Reviews:${_adapter.name}]` : '[Reviews]';
+  console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](tag, ...args);
+}
+
+// ─── Adapter selection ────────────────────────────────────────────────────────
+function pickAdapter() {
+  const registered = window.REVIEW_ADAPTERS || [];
+  for (const a of registered) {
+    try {
+      if (a.detect()) return a;
+    } catch (e) {
+      // A bad detect() shouldn't break the whole extension.
+      console.warn('[Reviews] adapter detect() threw:', a?.name, e);
+    }
+  }
+  return null;
 }
 
 // ─── Panel CSS ────────────────────────────────────────────────────────────────
@@ -60,11 +74,11 @@ function buildCSS() {
 }
 
 // ─── Panel HTML ───────────────────────────────────────────────────────────────
-function buildHTML() {
+function buildHTML(title) {
   return `
     <div id="panel">
       <div id="header">
-        <span id="title">Maps Reviews Extractor</span>
+        <span id="title">${title}</span>
         <button id="minimize-btn" title="Minimize">−</button>
       </div>
       <div id="body">
@@ -89,9 +103,9 @@ function buildHTML() {
 }
 
 // ─── Panel lifecycle ──────────────────────────────────────────────────────────
-function injectPanel() {
+function injectPanel(title) {
   const host = document.createElement('div');
-  host.id = 'maps-reviews-extractor-host';
+  host.id = 'reviews-extractor-host';
   document.body.appendChild(host);
 
   const shadow = host.attachShadow({ mode: 'open' });
@@ -101,7 +115,7 @@ function injectPanel() {
   shadow.appendChild(style);
 
   const wrapper = document.createElement('div');
-  wrapper.innerHTML = buildHTML().trim();
+  wrapper.innerHTML = buildHTML(title).trim();
   shadow.appendChild(wrapper.firstElementChild);
 
   _shadow = shadow;
@@ -142,230 +156,11 @@ function setButtons(state) {
   }
 }
 
-// ─── Business / DOM helpers ───────────────────────────────────────────────────
-function getBusinessName() {
-  // Confirmed from HTML: Maps has NO <h1>. Name is in aria-label on role="main",
-  // and as the first part of <title> ("Radio City - Google Maps").
-  const raw = (
-    document.querySelector('[role="main"]')?.getAttribute('aria-label')?.trim()
-    || document.querySelector('h1.DUwDvf')?.textContent?.trim()
-    || document.querySelector('h1')?.textContent?.trim()
-    || document.title.split(' - ')[0].trim()
-    || 'unknown'
-  );
-  // On the Reviews subview, aria-label can be "Reviews for X" / "Reviews of X"
-  // (or the Georgian "X-ის მიმოხილვები"). Strip so the filename is clean.
-  return raw
-    .replace(/^Reviews\s+(for|of)\s+/i, '')
-    .replace(/[-–—\s]*Google\s+Maps$/i, '')
-    .replace(/\s+/g, ' ')
-    .trim() || 'unknown';
-}
-
-// Confirmed from HTML: role="feed" does NOT exist in Maps.
-// The scrollable pane is .m6QErb[tabindex] or found via overflow walk-up.
-async function findReviewsContainer() {
-  // Strategy 1: confirmed tabindex scrollable pane (seen in real Maps HTML)
-  const tabPane = document.querySelector('.m6QErb[tabindex]');
-  if (tabPane) return tabPane;
-
-  // Strategy 2: walk up from a review card looking for scrollable ancestor
-  let review;
-  try {
-    review = await waitForElement('.jftiEf[data-review-id]', 15000);
-  } catch {
-    return null;
-  }
-
-  let el = review.parentElement;
-  while (el && el !== document.body) {
-    const ov = window.getComputedStyle(el).overflowY;
-    if ((ov === 'auto' || ov === 'scroll') && el.scrollHeight > el.clientHeight) return el;
-    el = el.parentElement;
-  }
-
-  // Strategy 3: any .m6QErb as last resort
-  return document.querySelector('.m6QErb') || null;
-}
-
-// Open the sort menu and click "Newest".
-async function sortByNewest() {
-  const allButtons = Array.from(document.querySelectorAll('button, [role="button"]'));
-
-  // Confirmed from HTML: Maps uses data-value="Sort" (capital S)
-  const sortBtn =
-    document.querySelector('[data-value="Sort"]')
-    || allButtons.find(el => {
-        const label = (el.getAttribute('aria-label') || el.textContent || '').toLowerCase().trim();
-        return label === 'sort' || label === 'sort reviews';
-      });
-
-  if (!sortBtn) return false;
-
-  sortBtn.click();
-
-  // Wait for the sort dropdown to render (roles confirmed in Maps: menuitemcheckbox)
-  const MENU_ROLES = '[role="menuitem"], [role="menuitemcheckbox"], [role="option"], [role="radio"]';
-  try {
-    await waitForElement(MENU_ROLES, 3000);
-  } catch {
-    // menu may use a different structure — fall through to text search
-  }
-
-  // Matches English "Newest" and Georgian "უახლესი"
-  const NEWEST_RE = /newest|უახლესი/i;
-
-  // Strategy 1: ARIA role-based (menuitemcheckbox is confirmed present in Maps HTML)
-  let newestOpt = Array.from(document.querySelectorAll(MENU_ROLES))
-    .find(el => NEWEST_RE.test(el.textContent));
-
-  // Strategy 2: any jsaction-bearing element with "Newest" as its short text
-  if (!newestOpt) {
-    newestOpt = Array.from(document.querySelectorAll('[jsaction]'))
-      .find(el => {
-        const t = el.textContent.trim();
-        return t.length < 25 && NEWEST_RE.test(t);
-      });
-  }
-
-  // Strategy 3: TreeWalker — find the "Newest" text node and click its parent
-  if (!newestOpt) {
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
-    let node;
-    while ((node = walker.nextNode())) {
-      const t = node.nodeValue.trim();
-      if (/^(Newest|უახლესი)$/i.test(t)) {
-        newestOpt = node.parentElement;
-        break;
-      }
-    }
-  }
-
-  if (!newestOpt) {
-    document.body.click();
-    return false;
-  }
-
-  newestOpt.click();
-  await sleep(1500);
-  return true;
-}
-
-// Click all un-expanded "More" buttons inside review cards in one pass.
-// IMPORTANT: Maps already sets data-mr-expanded="1" on its own elements,
-// so we use data-rext-expanded to avoid the conflict.
-async function expandVisibleMoreButtons() {
-  let clicked = 0;
-  for (const reviewEl of document.querySelectorAll('.jftiEf[data-review-id]')) {
-    if (reviewEl.dataset.rextExpanded) continue;
-    reviewEl.dataset.rextExpanded = '1';
-
-    const btns = Array.from(reviewEl.querySelectorAll('button, [role="button"]'));
-    const moreBtn = btns.find(b => {
-      const text = b.textContent.trim().toLowerCase();
-      return text === 'more' || text === 'მეტი';
-    });
-    if (moreBtn) {
-      moreBtn.click();
-      clicked++;
-    }
-  }
-  if (clicked > 0) await sleep(500);
-}
-
-// ─── Review extraction ────────────────────────────────────────────────────────
-function extractStars(el) {
-  // Standard Maps layout: <span class="kvMYJc" role="img" aria-label="5 stars">
-  const starEl =
-    el.querySelector('.kvMYJc[role="img"]')
-    || el.querySelector('span[role="img"][aria-label*="star"]');
-  if (starEl) {
-    const m = (starEl.getAttribute('aria-label') || '').match(/(\d)/);
-    if (m) return parseInt(m[1], 10);
-  }
-  // Hotel layout: <span class="fontBodyLarge fzvQIb">5/5</span>
-  const hotelEl = el.querySelector('.fzvQIb');
-  if (hotelEl) {
-    const m = hotelEl.textContent.trim().match(/^(\d)\/5$/);
-    if (m) return parseInt(m[1], 10);
-  }
-  return null;
-}
-
-function extractReviewer(el) {
-  // Confirmed from HTML: reviewer name is in <div class="d4r55"> inside
-  // a <button class="al6Kxe" data-href="...maps/contrib/...">
-  // There is NO <a href> — the link is a button with data-href.
-  return el.querySelector('.d4r55')?.textContent?.trim() || null;
-}
-
-function extractDateText(el) {
-  // Strategy 1: known Maps date class names
-  for (const sel of ['.rsqaWe', '.dehysf']) {
-    const node = el.querySelector(sel);
-    if (node) {
-      const raw = node.textContent.trim();
-      if (raw && isRelativeDate(raw)) return raw;
-    }
-  }
-
-  // Strategy 2: walk raw text nodes — works even when class names change.
-  // Text nodes give us the leaf string without sibling/ancestor contamination.
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-  let textNode;
-  while ((textNode = walker.nextNode())) {
-    const t = textNode.nodeValue.trim();
-    if (t.length > 2 && t.length < 70 && isRelativeDate(t)) return t;
-  }
-
-  // Strategy 3: aria-label attributes (Maps encodes dates here on some layouts)
-  for (const child of el.querySelectorAll('[aria-label]')) {
-    const label = (child.getAttribute('aria-label') || '').trim();
-    if (label.length < 70 && isRelativeDate(label)) return label;
-  }
-
-  return null;
-}
-
-function extractReviewText(el) {
-  // Confirmed from HTML: <span class="wiI7pd"> inside <div class="MyEned">
-  // jsname="bN97Pc" does NOT exist in real Maps HTML — removed.
-  const knownEl = el.querySelector('.wiI7pd') || el.querySelector('[class*="wiI7pd"]');
-  if (knownEl) return knownEl.textContent.trim() || null;
-
-  // Fallback: longest span that isn't a date string
-  let best = '';
-  for (const span of el.querySelectorAll('span')) {
-    const t = span.textContent.trim();
-    if (!isRelativeDate(t) && t.length > best.length && t.length > 20) best = t;
-  }
-  return best || null;
-}
-
-// Format a Date as YYYY-MM-DD using LOCAL calendar (not UTC), so dates don't
-// shift backwards for users in UTC+ timezones when we call toISOString().
-function localDateStr(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function extractReview(el) {
-  const dateText  = extractDateText(el);
-  const parsedDate = parseRelativeDate(dateText);
-  return {
-    id:         el.getAttribute('data-review-id'),
-    reviewer:   extractReviewer(el),
-    stars:      extractStars(el),
-    dateText,
-    date:       parsedDate ? localDateStr(parsedDate) : null,
-    reviewText: extractReviewText(el),
-  };
-}
-
 // ─── Download ─────────────────────────────────────────────────────────────────
 function downloadJSON(payload) {
-  const rawName = getBusinessName().replace(/[^a-z0-9]/gi, '_').slice(0, 60);
+  const rawName = _adapter.getBusinessName().replace(/[^a-z0-9]/gi, '_').slice(0, 60);
   const dateSuffix = new Date().toISOString().slice(0, 10);
-  const filename = `${rawName}_reviews_${dateSuffix}.json`;
+  const filename = `${rawName}_${_adapter.name}_reviews_${dateSuffix}.json`;
 
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url  = URL.createObjectURL(blob);
@@ -398,8 +193,6 @@ async function runCrawl() {
   }
 
   // Append time so the browser parses the date in LOCAL time, not UTC midnight.
-  // Without this, "2026-06-15" becomes June 15 00:00 UTC which is June 15 04:00
-  // local in GMT+4 — causing off-by-one comparisons against locally-computed dates.
   const fromDate = new Date(fromVal + 'T00:00:00');
   const toDate   = new Date(toVal   + 'T23:59:59.999');
 
@@ -411,16 +204,21 @@ async function runCrawl() {
   let skippedUndated    = 0;
 
   setStatus('Sorting reviews by newest…');
-  const sorted = await sortByNewest();
+  let sorted = false;
+  try {
+    sorted = await _adapter.sortByNewest();
+  } catch (e) {
+    log('warn', 'sortByNewest threw:', e);
+  }
   if (!sorted) {
-    log('warn', 'Sort by newest failed — early-stop disabled, will scroll to end');
-    setStatus('Sort failed — scanning full list…');
+    log('warn', 'Sort by newest failed — early-stop disabled, will scan full list');
+    setStatus('Sort not applied — scanning full list…');
   }
 
-  setStatus('Locating reviews pane…');
-  const container = await findReviewsContainer();
+  setStatus('Locating reviews…');
+  const container = await _adapter.findReviewsContainer();
   if (!container) {
-    setStatus('Reviews pane not found. Open a business page first.');
+    setStatus('Reviews not found. Navigate to the reviews section first.');
     _state = 'idle';
     setButtons('idle');
     return;
@@ -429,42 +227,52 @@ async function runCrawl() {
   setStatus('Crawling…');
 
   crawlLoop: while (_state === 'running') {
-    // Expand truncated reviews before scraping this batch
-    await expandVisibleMoreButtons();
+    // Expand truncated reviews before scraping this batch.
+    try {
+      await _adapter.expandVisibleMoreButtons();
+    } catch (e) {
+      log('warn', 'expandVisibleMoreButtons threw:', e);
+    }
 
-    // Use .jftiEf to target only the outer review card element.
-    // Maps puts data-review-id on ~9 elements per review (buttons, inner divs, etc.)
-    // — scoping to .jftiEf ensures we process each review exactly once.
-    const reviewEls = document.querySelectorAll('.jftiEf[data-review-id]');
+    const reviewEls = _adapter.getReviewElements();
+    let newIdsThisIter = 0;
 
     for (const el of reviewEls) {
       if (_state !== 'running') break crawlLoop;
 
-      const id = el.getAttribute('data-review-id');
-      if (seenIds.has(id)) continue;
-      seenIds.add(id);
+      let review;
+      try {
+        review = _adapter.extractReview(el);
+      } catch (e) {
+        log('warn', 'extractReview threw:', e);
+        continue;
+      }
 
-      const review = extractReview(el);
-      const date   = parseRelativeDate(review.dateText);
+      const id = review.id;
+      if (!id || seenIds.has(id)) continue;
+      seenIds.add(id);
+      newIdsThisIter++;
+
+      // Parse the raw dateText afresh — adapter already stored review.date
+      // as a string, but we need the Date object for range comparison.
+      const date = parseAnyDate(review.dateText);
 
       if (date === null) {
-        // Could not parse date — skip but don't let it trigger early-stop
         skippedUndated++;
         log('warn', `Skipped review ${id}: date text not recognised (dateText=${JSON.stringify(review.dateText)})`);
       } else if (date > toDate) {
+        log('info', `Skipped (too new): ${review.reviewer || '?'} — dateText=${JSON.stringify(review.dateText)}, parsed=${review.date}`);
         seenTooNew = true;
         consecutiveTooOld = 0;
       } else if (date < fromDate) {
+        log('info', `Skipped (too old): ${review.reviewer || '?'} — dateText=${JSON.stringify(review.dateText)}, parsed=${review.date}`);
         consecutiveTooOld++;
-        // Early-stop only makes sense when the feed is date-ordered.
-        // If sortByNewest failed, dates are jumbled and early-stopping
-        // would drop in-range reviews further down the list.
         if (sorted && consecutiveTooOld >= MAX_CONSECUTIVE_TOO_OLD && (seenTooNew || reviews.length > 0)) {
           log('info', `Stopping: ${MAX_CONSECUTIVE_TOO_OLD} consecutive reviews older than from-date.`);
           break crawlLoop;
         }
       } else {
-        // Date is within [fromDate, toDate]
+        log('info', `Collected: ${review.reviewer || '?'} — dateText=${JSON.stringify(review.dateText)}, parsed=${review.date}`);
         consecutiveTooOld = 0;
         seenTooNew = true;
         reviews.push(review);
@@ -472,11 +280,30 @@ async function runCrawl() {
       }
     }
 
-    const prevScrollHeight = container.scrollHeight;
-    container.scrollTop = container.scrollHeight;
-    await sleep(1500);
+    // Safeguard: if the DOM has cards but we didn't add any NEW ids this
+    // iteration, the page didn't actually turn. Treat as stalled instead
+    // of advancing again — otherwise we'd click "next" repeatedly and
+    // skip whole pages of reviews.
+    if (reviewEls.length > 0 && newIdsThisIter === 0) {
+      emptyScrolls++;
+      if (emptyScrolls >= MAX_EMPTY_SCROLLS) {
+        log('info', 'No new reviews after several attempts — stopping.');
+        break;
+      }
+      await sleep(1000);
+      continue;
+    }
 
-    if (container.scrollHeight === prevScrollHeight) {
+    // Ask the adapter to advance (scroll / next-page / show-more).
+    let progress;
+    try {
+      progress = await _adapter.advance(container);
+    } catch (e) {
+      log('warn', 'advance threw:', e);
+      progress = 'stalled';
+    }
+
+    if (progress === 'stalled') {
       emptyScrolls++;
       if (emptyScrolls >= MAX_EMPTY_SCROLLS) {
         log('info', 'Reached end of reviews list.');
@@ -501,7 +328,8 @@ async function runCrawl() {
 
   if (reviews.length > 0) {
     downloadJSON({
-      business:        getBusinessName(),
+      source:          _adapter.name,
+      business:        _adapter.getBusinessName(),
       url:             location.href,
       dateRange:       { from: fromVal, to: toVal },
       extractedAt:     new Date().toISOString(),
@@ -548,7 +376,7 @@ function wireButtons(shadow) {
 // ─── Extension icon toggle ────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type !== 'toggle-panel') return;
-  const host = document.getElementById('maps-reviews-extractor-host');
+  const host = document.getElementById('reviews-extractor-host');
   if (!host) {
     init();
   } else {
@@ -558,31 +386,36 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 // ─── SPA navigation guard ─────────────────────────────────────────────────────
-// Google Maps is a SPA; content scripts don't re-run on in-app navigation.
+// Maps and TripAdvisor/Expedia are SPAs; content scripts don't re-run on
+// in-app navigation. Re-init the panel after URL changes.
 function watchForNavigation() {
   setInterval(() => {
     if (location.href === _lastUrl) return;
     _lastUrl = location.href;
-    // Wait for Maps to finish rendering the new page
     setTimeout(() => {
-      if (!document.getElementById('maps-reviews-extractor-host')) init();
+      if (!document.getElementById('reviews-extractor-host')) init();
     }, 2000);
   }, 1000);
 }
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 function init() {
-  const existingHost = document.getElementById('maps-reviews-extractor-host');
+  _adapter = pickAdapter();
+  if (!_adapter) {
+    console.warn('[Reviews] No adapter matched this URL — panel not injected.');
+    return;
+  }
+
+  const existingHost = document.getElementById('reviews-extractor-host');
   if (existingHost && _shadow) return;
-  // Stale host from a previous injection (e.g. extension reload). Its
-  // event listeners are dead — remove it so we can wire fresh ones.
+  // Stale host from a previous injection — remove so we can wire fresh listeners.
   if (existingHost) existingHost.remove();
 
-  const shadow = injectPanel();
+  const shadow = injectPanel(_adapter.label || 'Reviews Extractor');
   wireButtons(shadow);
 
-  const today          = new Date();
-  const firstOfMonth   = new Date(today.getFullYear(), today.getMonth(), 1);
+  const today        = new Date();
+  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
 
   shadow.querySelector('#to-date').value   = localDateStr(today);
   shadow.querySelector('#from-date').value = localDateStr(firstOfMonth);
