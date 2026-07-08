@@ -159,7 +159,7 @@ function setButtons(state) {
 // ─── Download ─────────────────────────────────────────────────────────────────
 function downloadJSON(payload) {
   const rawName = _adapter.getBusinessName().replace(/[^a-z0-9]/gi, '_').slice(0, 60);
-  const dateSuffix = new Date().toISOString().slice(0, 10);
+  const dateSuffix = localDateStr(new Date());
   const filename = `${rawName}_${_adapter.name}_reviews_${dateSuffix}.json`;
 
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
