@@ -346,20 +346,27 @@
     }
 
     // Pass 1 (dominant on current TA): find the smallest element whose
-    // flattened textContent ends with "wrote a review <date>". Walking
-    // ELEMENTS (not text nodes) is critical — TA sometimes wraps the date
-    // itself in an inner <span>, which splits the phrase across two
-    // sibling text nodes and defeats a text-node scan. This approach works
-    // whether the date is bare text or wrapped, because the parent element's
-    // flattened textContent contains the whole phrase either way.
-    const WROTE_RE = /wrote\s+a\s+review\s+(.+?)\s*$/i;
+    // flattened textContent matches one of the publish-date phrasings —
+    // "wrote a review <date>" or "<Written|Reviewed|Posted> <date>". Walking
+    // ELEMENTS (not text nodes) is critical: TA wraps the date itself in an
+    // inner <span>, which splits the phrase across sibling text nodes and
+    // defeats a text-node scan. The parent element's flattened textContent
+    // contains the whole phrase either way.
+    // NOT "Stayed …" — that's the stay date on hotel cards, never the
+    // publish date.
+    const PHRASE_RES = [
+      /wrote\s+a\s+review\s+(.+?)\s*$/i,
+      /^(?:written|reviewed|posted)(?:\s+on)?\s+(.+?)\s*$/i,
+    ];
     let best = null;
     for (const c of el.querySelectorAll('div, span, p, li')) {
       const flat = (c.textContent || '').replace(/\s+/g, ' ').trim();
       if (!flat || flat.length > 80) continue;
-      const m = flat.match(WROTE_RE);
-      if (!m) continue;
-      const datePart = m[1].trim();
+      let datePart = null;
+      for (const re of PHRASE_RES) {
+        const m = flat.match(re);
+        if (m) { datePart = m[1].trim(); break; }
+      }
       if (!datePart || datePart.length > 30) continue;
       const normalized = _taNormalizeWroteDate(datePart);
       // Only accept captures that actually parse. This filters out cases
@@ -372,7 +379,7 @@
     }
     if (best) return best.normalized;
 
-    // Collect text nodes for legacy-format fallbacks.
+    // Collect text nodes for pure relative-date fallback.
     const nodes = [];
     const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
     let n;
@@ -381,15 +388,7 @@
       if (t && t.length <= 80) nodes.push(t);
     }
 
-    // Pass 2 (legacy TA): "Reviewed October 15, 2026" / "Written 3 days ago".
-    // NOT "Stayed …" — that's the stay date, which we must never treat as
-    // the publish date on hotel cards.
-    const LEGACY_PREFIX_RE = /^(written|reviewed|posted)\b/i;
-    for (const t of nodes) {
-      if (LEGACY_PREFIX_RE.test(t) && isAnyDate(t)) return t;
-    }
-
-    // Pass 3: relative dates only. We deliberately do NOT fall back to bare
+    // Pass 2: relative dates only. We deliberately do NOT fall back to bare
     // absolute dates — on hotels the only bare absolute in the card is the
     // "Date of stay: July 2026" value, and picking that up made every review
     // look like it was published on the check-in month.
