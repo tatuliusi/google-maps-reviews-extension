@@ -32,6 +32,7 @@ function buildCSS() {
     :host { all: initial; }
     *, *::before, *::after { box-sizing: border-box; }
     #panel {
+      pointer-events: auto;
       position: fixed; top: 80px; right: 16px; z-index: 2147483647;
       width: 272px; background: #fff; border-radius: 8px;
       box-shadow: 0 2px 16px rgba(0,0,0,.28); overflow: hidden;
@@ -106,6 +107,7 @@ function buildHTML(title) {
 function injectPanel(title) {
   const host = document.createElement('div');
   host.id = 'reviews-extractor-host';
+  host.style.cssText = 'position:fixed!important;top:0!important;left:0!important;width:0!important;height:0!important;overflow:visible!important;z-index:2147483647!important;pointer-events:none!important;';
   document.body.appendChild(host);
 
   const shadow = host.attachShadow({ mode: 'open' });
