@@ -110,6 +110,13 @@ function injectPanel(title) {
   host.style.cssText = 'position:fixed!important;top:0!important;left:0!important;width:0!important;height:0!important;overflow:visible!important;z-index:2147483647!important;pointer-events:none!important;';
   document.body.appendChild(host);
 
+  new MutationObserver(() => {
+    if (host.inert) {
+      host.inert = false;
+      log('info', 'Removed inert attribute from panel host');
+    }
+  }).observe(host, { attributes: true, attributeFilter: ['inert'] });
+
   const shadow = host.attachShadow({ mode: 'open' });
 
   const style = document.createElement('style');
@@ -379,10 +386,13 @@ function wireButtons(shadow) {
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type !== 'toggle-panel') return;
   const host = document.getElementById('reviews-extractor-host');
-  if (!host) {
+  if (!host || !_shadow?.host?.isConnected) {
+    if (host) host.remove();
+    _shadow = null;
     init();
   } else {
-    const panel = _shadow?.querySelector('#panel');
+    host.inert = false;
+    const panel = _shadow.querySelector('#panel');
     if (panel) panel.style.display = panel.style.display === 'none' ? '' : 'none';
   }
 });
